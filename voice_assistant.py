@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 #install packages first in .venv
 #using bosonai/higgs-audio-v3-tts-4b model
+#optional : try https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb for voice recognition
 #pip install google-genai sounddevice soundfile numpy faster-whisper webrtcvad vllm-omni transformers
 import os
 import time
