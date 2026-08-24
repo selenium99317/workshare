@@ -29,13 +29,29 @@ FRAME_DURATION_MS = 30  # 30ms chunks for VAD
 BLOCK_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
 JABRA_KEYWORD = "Jabra"
 
-def find_audio_device(keyword, kind="input"):
+def select_audio_device(kind="input"):
     devices = sd.query_devices()
+    valid_devices = []
+    
+    print(f"\nAvailable {kind} devices:")
     for idx, dev in enumerate(devices):
-        if keyword.lower() in dev['name'].lower() and dev[kind + '_channels'] > 0:
-            print(f"Found Jabra {kind} device [{idx}]: {dev['name']}")
-            return idx
-    print(f"Warning: Jabra '{keyword}' {kind} device not found. Using system default.")
+        if dev[kind + '_channels'] > 0:
+            valid_devices.append((idx, dev['name']))
+            print(f"  [{idx}] {dev['name']}")
+            
+    # If you want to auto-select the first available or system default:
+    if not valid_devices:
+        print(f"No {kind} devices found. Falling back to system default.")
+        return None
+
+    # Optional: Prompt user to choose, or auto-pick the system default
+    # For fully automated selection, you can just return sd.default.device[0] or [1]
+    choice = input(f"Select {kind} device ID (or press Enter for default): ").strip()
+    
+    if choice.isdigit() and int(choice) in [d[0] for d in valid_devices]:
+        return int(choice)
+    
+    print("Using system default device.")
     return None
 
 def _extract_pcm(multimodal_output: dict) -> torch.Tensor:
@@ -68,9 +84,9 @@ def main():
     engine = Omni(model=model_id, trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     adapter = HiggsAudioV3TokenizerAdapter(tokenizer)
-
-    input_device_idx = find_audio_device(JABRA_KEYWORD, kind="input")
-    output_device_idx = find_audio_device(JABRA_KEYWORD, kind="output")
+    
+    input_device_idx = select_audio_device(kind="input")
+    output_device_idx = select_audio_device(kind="output")
 
     vad = webrtcvad.Vad(2) # Aggressiveness mode (0 to 3)
 
