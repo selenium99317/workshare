@@ -5,7 +5,6 @@
 import os
 import time
 import collections
-array = None
 import numpy as np
 import sounddevice as sd
 import torch
@@ -23,11 +22,10 @@ from transformers import AutoTokenizer
 from vllm_omni.model_executor.models.higgs_audio_v3.higgs_audio_v3_tokenizer import HiggsAudioV3TokenizerAdapter
 
 # Configuration parameters
-SAMPLE_RATE = 16000  # WebRTC VAD requires 8k, 16k, 32k, or 48k
+SAMPLE_RATE = 16000 
 OUT_SAMPLE_RATE = 24_000
-FRAME_DURATION_MS = 30  # 30ms chunks for VAD
+FRAME_DURATION_MS = 30 
 BLOCK_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
-JABRA_KEYWORD = "Jabra"
 
 def select_audio_device(kind="input"):
     devices = sd.query_devices()
@@ -39,15 +37,11 @@ def select_audio_device(kind="input"):
             valid_devices.append((idx, dev['name']))
             print(f"  [{idx}] {dev['name']}")
             
-    # If you want to auto-select the first available or system default:
     if not valid_devices:
-        print(f"No {kind} devices found. Falling back to system default.")
+        print(f"No {kind} devices found. Using system default.")
         return None
 
-    # Optional: Prompt user to choose, or auto-pick the system default
-    # For fully automated selection, you can just return sd.default.device[0] or [1]
     choice = input(f"Select {kind} device ID (or press Enter for default): ").strip()
-    
     if choice.isdigit() and int(choice) in [d[0] for d in valid_devices]:
         return int(choice)
     
@@ -84,22 +78,24 @@ def main():
     engine = Omni(model=model_id, trust_remote_code=True)
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     adapter = HiggsAudioV3TokenizerAdapter(tokenizer)
-    
+
+    # Dynamic device selection for whatever headphones/phone/speaker you are using now
+    print("\n--- Audio Device Setup ---")
     input_device_idx = select_audio_device(kind="input")
     output_device_idx = select_audio_device(kind="output")
 
     vad = webrtcvad.Vad(2) # Aggressiveness mode (0 to 3)
 
     print("\n--- Hands-Free Voice Assistant Active ---")
-    print("Just start speaking into your Jabra speakerphone. Press Ctrl+C to exit.\n")
+    print("Just start speaking. Press Ctrl+C to exit.\n")
 
     try:
         while True:
             print("Listening for speech...", end="\r", flush=True)
             
             triggered = False
-            voiced_frames = collections.deque(maxlen=10)  # Padding to catch start of speech
-            ring_buffer = collections.deque(maxlen=15)     # Silence buffer to detect end of speech
+            voiced_frames = collections.deque(maxlen=10) 
+            ring_buffer = collections.deque(maxlen=15)     
             recorded_frames = []
 
             with sd.InputStream(samplerate=SAMPLE_RATE, blocksize=BLOCK_SIZE, channels=1, 
@@ -114,12 +110,10 @@ def main():
 
                     if not triggered:
                         voiced_frames.append((bytes_data, is_speech))
-                        # If more than half of the recent frames contain speech, trigger recording
                         num_voiced = len([f for f, speech in voiced_frames if speech])
                         if num_voiced > 0.5 * voiced_frames.maxlen:
                             triggered = True
                             print("\n[Speech detected! Recording...]")
-                            # Add pre-buffered frames so we don't clip the first syllable
                             for f, _ in voiced_frames:
                                 recorded_frames.append(f)
                             voiced_frames.clear()
@@ -127,13 +121,11 @@ def main():
                         recorded_frames.append(bytes_data)
                         ring_buffer.append((bytes_data, is_speech))
                         
-                        # Check for end of speech (e.g., continuous silence for ~450ms)
                         num_unvoiced = len([f for f, speech in ring_buffer if not speech])
                         if ring_buffer.maxlen and num_unvoiced > 0.8 * ring_buffer.maxlen:
-                            break # Stop listening, user stopped talking
+                            break 
 
             print("Processing voice input...")
-            # Convert collected raw bytes back to float numpy array for Whisper
             audio_buffer = b"".join(recorded_frames)
             audio_np = np.frombuffer(audio_buffer, dtype=np.int16).astype(np.float32) / 32768.0
 
@@ -162,7 +154,7 @@ def main():
             pcm = _extract_pcm(mm)
             wav_int16 = _pcm_to_int16(pcm)
 
-            print("Playing response through Jabra speaker...")
+            print("Playing response...")
             sd.play(wav_int16, samplerate=OUT_SAMPLE_RATE, device=output_device_idx)
             sd.wait()
             print("-" * 50 + "\n")
