@@ -162,23 +162,35 @@ def main():
             print(f"You said: \"{user_text}\"")
 
             print("Asking Gemini...")
+            # Configure Gemini to naturally inject expression tags
             response = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=user_text,
+                config={
+                    "system_instruction": (
+                        "You are a warm, expressive, and conversational voice assistant. "
+                        "Feel free to naturally inject emotional style tags into your response text to shape the voice output. "
+                        "Available tags you can use: [excitement], [whispering], [laugh], [thoughtful]. "
+                        "Place them right before the sentences they apply to (e.g., '[excitement] I would love to help you with that!')."
+                    )
+                }
             )
             gemini_reply = response.text.strip()
-            print(f"Gemini says: \"{gemini_reply}\"")
+            
+            # Clean display text for your terminal (removes brackets for reading)
+            import re
+            clean_display_text = re.sub(r'\[.*?\]', '', gemini_reply).strip()
+            print(f"Gemini says: \"{clean_display_text}\" (Raw reply: {gemini_reply})")
 
             print("Synthesizing voice response in cloned voice...")
             
-            # Build prompt tokens incorporating reference voice codes if available
+            # Pass the full gemini_reply (retaining tags like [excitement]) to Higgs so it interprets the style
             if ref_codes is not None:
                 prompt_ids = adapter.build_prompt(
                     text=gemini_reply,
                     num_ref_tokens=ref_codes.shape[0],
                     reference_text=REF_TEXT
                 )
-                # Attach the actual reference token codes into the engine request layout
                 outputs = engine.generate([{
                     "prompt_token_ids": prompt_ids,
                     "reference_audio_codes": ref_codes
