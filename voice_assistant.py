@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-#install packages first in .venv
-#using bosonai/higgs-audio-v3-tts-4b model
-#optional : try https://huggingface.co/speechbrain/spkrec-ecapa-voxceleb for voice recognition
-#pip install google-genai sounddevice soundfile numpy faster-whisper webrtcvad vllm-omni transformers
+# install packages first in .venv
+# using bosonai/higgs-audio-v3-tts-4b model with voice cloning reference
+# pip install google-genai sounddevice soundfile numpy faster-whisper webrtcvad vllm-omni transformers
+
 import os
 import time
 import collections
@@ -20,13 +20,21 @@ from google import genai
 from faster_whisper import WhisperModel
 from vllm_omni import Omni
 from transformers import AutoTokenizer
-from vllm_omni.model_executor.models.higgs_audio_v3.higgs_audio_v3_tokenizer import HiggsAudioV3TokenizerAdapter
+from vllm_omni.model_executor.models.higgs_audio_v3.higgs_audio_v3_tokenizer import (
+    HiggsAudioV3TokenizerAdapter,
+    encode_reference_audio,
+)
 
 # Configuration parameters
-SAMPLE_RATE = 16000 
-OUT_SAMPLE_RATE = 24_000
-FRAME_DURATION_MS = 30 
+SAMPLE_RATE = 16000
+OUT_SAMPLE_RATE = 24000
+FRAME_DURATION_MS = 30
 BLOCK_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
+
+# --- VOICE CLONING CONFIGURATION ---
+# Put your 3-10 second clear .wav file here, and type its exact verbatim transcript below
+REF_AUDIO_PATH = "my_voice_ref.wav"
+REF_TEXT = "Hey, this is a clean sample of my own voice speaking naturally."
 
 def select_audio_device(kind="input"):
     devices = sd.query_devices()
@@ -80,7 +88,21 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     adapter = HiggsAudioV3TokenizerAdapter(tokenizer)
 
-    # Dynamic device selection for whatever headphones/phone/speaker you are using now
+    # Pre-process your voice reference clip if file exists
+    ref_codes = None
+    if os.path.exists(REF_AUDIO_PATH):
+        print(f"Processing reference voice file: {REF_AUDIO_PATH}")
+        import soundfile as sf
+        ref_wav, ref_sr = sf.read(REF_AUDIO_PATH)
+        # Encode reference audio into raw codebook tensors via vLLM-Omni utility
+        raw_codes = encode_reference_audio(ref_wav, ref_sr)
+        ref_codes = adapter.apply_delay_pattern(raw_codes)
+        print("Reference voice encoded successfully for cloning!")
+    else:
+        print(f"\n[WARNING]: Reference audio file '{REF_AUDIO_PATH}' not found!")
+        print("The assistant will fallback to default model voice generation until you provide one.\n")
+
+    # Dynamic device selection for hardware
     print("\n--- Audio Device Setup ---")
     input_device_idx = select_audio_device(kind="input")
     output_device_idx = select_audio_device(kind="output")
@@ -139,7 +161,7 @@ def main():
 
             print(f"You said: \"{user_text}\"")
 
-            print("Asking Gemini Flash...")
+            print("Asking Gemini...")
             response = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=user_text,
@@ -147,9 +169,23 @@ def main():
             gemini_reply = response.text.strip()
             print(f"Gemini says: \"{gemini_reply}\"")
 
-            print("Synthesizing voice response locally...")
-            prompt_ids = adapter.build_prompt(gemini_reply)
-            outputs = engine.generate([{"prompt_token_ids": prompt_ids}])
+            print("Synthesizing voice response in cloned voice...")
+            
+            # Build prompt tokens incorporating reference voice codes if available
+            if ref_codes is not None:
+                prompt_ids = adapter.build_prompt(
+                    text=gemini_reply,
+                    num_ref_tokens=ref_codes.shape[0],
+                    reference_text=REF_TEXT
+                )
+                # Attach the actual reference token codes into the engine request layout
+                outputs = engine.generate([{
+                    "prompt_token_ids": prompt_ids,
+                    "reference_audio_codes": ref_codes
+                }])
+            else:
+                prompt_ids = adapter.build_prompt(text=gemini_reply)
+                outputs = engine.generate([{"prompt_token_ids": prompt_ids}])
 
             mm = outputs[0].outputs[0].multimodal_output
             pcm = _extract_pcm(mm)
